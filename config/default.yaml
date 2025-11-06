@@ -1,0 +1,83 @@
+project:
+  name: "intelligent-nesting"
+  version: "0.1.0"
+  seed: 42
+
+paths:
+  data_dir: "data"
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+  output_dir: "outputs"
+
+device: "cuda"  # cuda, cpu, mps
+
+# CNN Configuration
+cnn:
+  architecture: "resnet18"  # resnet18, resnet50
+  input_channels: 6
+  embedding_dim: 256
+  pretrained: false
+  freeze_encoder: false
+
+# GNN Configuration
+gnn:
+  type: "gat"  # gat, gcn
+  hidden_dim: 128
+  num_layers: 3
+  num_heads: 4
+  dropout: 0.2
+
+# Transformer Configuration
+transformer:
+  d_model: 256
+  nhead: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 1024
+  dropout: 0.1
+
+# RL Configuration
+rl:
+  algorithm: "ppo"
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  learning_rate: 0.0003
+  batch_size: 64
+  n_epochs: 10
+  n_steps: 2048
+
+# Training Configuration
+training:
+  max_iterations: 10000
+  eval_frequency: 100
+  save_frequency: 500
+  log_frequency: 10
+  curriculum_enabled: true
+  
+curriculum:
+  start_pieces: 3
+  max_pieces: 50
+  start_complexity: "rectangles"
+  max_complexity: "irregular"
+
+# Environment Configuration
+environment:
+  max_steps: 100
+  container_width: 1000
+  container_height: 600
+  rotation_bins: 36  # 360/10 = 36 bins de 10 graus
+  spacing: 2.0  # mm entre peças
+
+# Reward Configuration
+reward:
+  valid_placement: 1.0
+  invalid_placement: -5.0
+  touching_bonus: 0.5
+  corner_bonus: 0.3
+  hole_penalty: -0.2
+  progress_reward: 0.1
+  time_penalty: -0.01
+  final_multiplier: 100.0
