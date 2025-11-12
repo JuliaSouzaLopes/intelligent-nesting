@@ -1,0 +1,3 @@
+[console_scripts]
+nesting-eval = experiments.05_evaluation:main
+nesting-train = experiments.04_rl_training:main

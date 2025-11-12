@@ -1,0 +1,24 @@
+Metadata-Version: 2.4
+Name: intelligent-nesting
+Version: 0.1.0
+Summary: Sistema Inteligente de Nesting com Deep RL
+Author: Seu Nome
+Author-email: seu.email@universidade.br
+Requires-Python: >=3.10
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: torch>=2.0.0
+Requires-Dist: shapely>=2.0.0
+Requires-Dist: gymnasium>=0.28.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.3.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: flake8>=6.0.0; extra == "dev"
+Provides-Extra: viz
+Requires-Dist: plotly>=5.14.0; extra == "viz"
+Requires-Dist: seaborn>=0.12.0; extra == "viz"
+Dynamic: author
+Dynamic: author-email
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

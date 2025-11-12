@@ -68,7 +68,7 @@ class Polygon:
     @property
     def shapely(self) -> ShapelyPolygon:
         #"""Converte para Shapely Polygon (cached)"""
-        if self._shapely_polygon is None:
+        if not hasattr(self, '_shapely_polygon') or self._shapely_polygon is None:
             coords = [(v.x, v.y) for v in self.vertices]
             self._shapely_polygon = ShapelyPolygon(coords)
         return self._shapely_polygon

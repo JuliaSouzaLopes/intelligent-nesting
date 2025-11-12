@@ -9,11 +9,14 @@ from pathlib import Path
 from tqdm import tqdm
 import time
 import yaml
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.models.cnn.encoder import LayoutCNNEncoder
 
-# Imports dos módulos (assumindo estrutura do projeto)
-# from src.models.cnn.encoder import LayoutCNNEncoder
-# from src.environment.nesting_env import NestingEnvironment, NestingConfig
-# from src.training.curriculum import CurriculumScheduler
+from src.models.cnn.encoder import LayoutCNNEncoder
+from src.environment.nesting_env import NestingEnvironment, NestingConfig
+from src.training.curriculum import CurriculumScheduler
 
 #Script completo de treinamento do sistema de nesting com PPO.
 #Integra CNN, Environment e algoritmo de RL.
@@ -36,10 +39,10 @@ class ActorCritic(nn.Module):
         super().__init__()
         
         # CNN Encoder (assumindo já implementado)
-        # self.cnn = LayoutCNNEncoder(
-        #     input_channels=6,
-        #     embedding_dim=cnn_embedding_dim
-        # )
+        self.cnn = LayoutCNNEncoder(
+            input_channels=6,
+            embedding_dim=cnn_embedding_dim
+        )
         
         # Placeholder para CNN
         self.cnn_embedding_dim = cnn_embedding_dim
@@ -81,11 +84,11 @@ class ActorCritic(nn.Module):
         layout_image = observation['layout_image']
         
         # PLACEHOLDER: simular embedding CNN
-        batch_size = layout_image.shape[0]
-        cnn_embedding = torch.randn(batch_size, self.cnn_embedding_dim,
-                                   device=layout_image.device)
+        #batch_size = layout_image.shape[0]
+        #cnn_embedding = torch.randn(batch_size, self.cnn_embedding_dim,
+        #                           device=layout_image.device)
         
-        # cnn_embedding, _ = self.cnn(layout_image)  # Real implementation
+        cnn_embedding, heatmap = self.cnn(layout_image)  # Real implementation
         
         # Concatenar todas as features
         current_piece = observation['current_piece']
@@ -363,7 +366,7 @@ class PPOTrainer:
     def _update_policy(self, trajectories: Dict, 
                       advantages: np.ndarray,
                       returns: np.ndarray) -> Dict:
-        #"""Atualiza política usando PPO"""
+        # """Atualiza política usando PPO"""
         
         # Preparar dados
         n_samples = len(trajectories['rewards'])

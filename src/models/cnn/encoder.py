@@ -125,7 +125,7 @@ class LayoutCNNEncoder(nn.Module):
             nn.ReLU(inplace=True)
         )
         # Output: 256 × 16 × 16
-        
+
         self.up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
         self.dec3 = nn.Sequential(
             nn.Conv2d(256, 128, kernel_size=3, padding=1),  # 256 = 128 + 128
@@ -136,7 +136,7 @@ class LayoutCNNEncoder(nn.Module):
             nn.ReLU(inplace=True)
         )
         # Output: 128 × 32 × 32
-        
+
         self.up2 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
         self.dec2 = nn.Sequential(
             nn.Conv2d(128, 64, kernel_size=3, padding=1),  # 128 = 64 + 64
@@ -147,22 +147,22 @@ class LayoutCNNEncoder(nn.Module):
             nn.ReLU(inplace=True)
         )
         # Output: 64 × 64 × 64
-        
-        self.up1 = nn.ConvTranspose2d(64, 64, kernel_size=2, stride=2)
+
+        self.up1 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
         self.dec1 = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # 128 = 64 + 64
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),  # Apenas 32 (sem skip)
             nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
             nn.ReLU(inplace=True)
         )
-        # Output: 32 × 128 × 128
-        
+        # Output: 16 × 128 × 128
+
         # Final upsampling to 256×256
-        self.final_up = nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2)
+        self.final_up = nn.ConvTranspose2d(16, 8, kernel_size=2, stride=2)
         self.final_conv = nn.Sequential(
-            nn.Conv2d(16, 8, kernel_size=3, padding=1),
+            nn.Conv2d(8, 8, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(8, 1, kernel_size=1)
         )
@@ -195,47 +195,55 @@ class LayoutCNNEncoder(nn.Module):
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # """
-        # Forward pass.
-        
-        # Args:
-        #     x: Input tensor (batch_size, 6, 256, 256)
-        
-        # Returns:
-        #     embedding: (batch_size, embedding_dim)
-        #     heatmap: (batch_size, 1, 256, 256) - valores em [0,1]
-        # """
-        # Encoder
+    # """
+    # Forward pass.
+    
+    # Args:
+    #     x: Input tensor (batch_size, 6, 256, 256)
+    
+    # Returns:
+    #     embedding: (batch_size, embedding_dim)
+    #     heatmap: (batch_size, 1, 256, 256) - valores em [0,1]
+    # """
+    # # Encoder
         x0 = self.stem(x)           # 64 × 64 × 64
         x1 = self.layer1(x0)        # 64 × 64 × 64
         x2 = self.layer2(x1)        # 128 × 32 × 32
         x3 = self.layer3(x2)        # 256 × 16 × 16
         x4 = self.layer4(x3)        # 512 × 8 × 8
         
-        # Bottleneck → Embedding
+        # =========================================================================
+        # BOTTLENECK → EMBEDDING
+        # =========================================================================
         pooled = self.global_pool(x4)  # 512 × 1 × 1
         pooled = torch.flatten(pooled, 1)  # 512
         embedding = self.fc_embedding(pooled)  # embedding_dim
         
-        # Decoder com skip connections
+        # =========================================================================
+        # DECODER (com skip connections nos níveis superiores)
+        # =========================================================================
+        
+        # Level 4: 8×8 → 16×16
         d4 = self.up4(x4)  # 256 × 16 × 16
-        d4 = torch.cat([d4, x3], dim=1)  # 512 × 16 × 16
+        d4 = torch.cat([d4, x3], dim=1)  # 512 × 16 × 16 (skip connection)
         d4 = self.dec4(d4)  # 256 × 16 × 16
         
+        # Level 3: 16×16 → 32×32
         d3 = self.up3(d4)  # 128 × 32 × 32
-        d3 = torch.cat([d3, x2], dim=1)  # 256 × 32 × 32
+        d3 = torch.cat([d3, x2], dim=1)  # 256 × 32 × 32 (skip connection)
         d3 = self.dec3(d3)  # 128 × 32 × 32
         
+        # Level 2: 32×32 → 64×64
         d2 = self.up2(d3)  # 64 × 64 × 64
-        d2 = torch.cat([d2, x1], dim=1)  # 128 × 64 × 64
+        d2 = torch.cat([d2, x1], dim=1)  # 128 × 64 × 64 (skip connection)
         d2 = self.dec2(d2)  # 64 × 64 × 64
         
-        d1 = self.up1(d2)  # 64 × 128 × 128
-        d1 = torch.cat([d1, x0], dim=1)  # 128 × 128 × 128
-        d1 = self.dec1(d1)  # 32 × 128 × 128
+        # Level 1: 64×64 → 128×128 (SEM skip connection)
+        d1 = self.up1(d2)  # 32 × 128 × 128
+        d1 = self.dec1(d1)  # 16 × 128 × 128
         
-        # Final
-        d0 = self.final_up(d1)  # 16 × 256 × 256
+        # Final: 128×128 → 256×256
+        d0 = self.final_up(d1)  # 8 × 256 × 256
         heatmap = self.final_conv(d0)  # 1 × 256 × 256
         heatmap = torch.sigmoid(heatmap)  # [0, 1]
         

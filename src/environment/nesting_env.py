@@ -4,7 +4,11 @@ import numpy as np
 from typing import List, Tuple, Dict, Optional, Any
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
-
+from src.geometry.polygon import Polygon
+from src.geometry.nfp import NFPCalculator
+from src.representation.image_encoder import render_layout_as_image
+from src.geometry.polygon import create_rectangle
+from src.geometry.polygon import create_random_polygon
 # Imports dos módulos anteriores (assumindo que estão implementados)
 # from src.geometry.polygon import Polygon, Point, create_rectangle
 # from src.geometry.nfp import NFPCalculator
@@ -246,66 +250,86 @@ class NestingEnvironment(gym.Env):
         return observation, reward_total, terminated, truncated, info
     
     def _place_piece(self, piece, x: float, y: float, 
-                    rotation: float) -> Tuple[bool, float, Dict]:
-        # """
-        # Tenta colocar uma peça.
+                rotation: float) -> Tuple[bool, float, Dict]:
+    # """
+    # Tenta colocar uma peça (VERSÃO REAL CORRIGIDA).
+    
+    # Args:
+    #     piece: Polygon a ser colocado
+    #     x: Posição x
+    #     y: Posição y
+    #     rotation: Rotação em graus
+    
+    # Returns:
+    #     success, reward, info
+    # """
+        from src.geometry.polygon import Polygon
         
-        # Returns:
-        #     success, reward, info
-        # """
-        # Rotacionar peça
-        # rotated_piece = piece.rotate(rotation)
-        # moved_piece = rotated_piece.set_position(x, y)
-        
-        # SIMULAÇÃO (sem geometria real por enquanto)
-        # Na implementação real, usar NFP para verificar colisões
-        
-        # Simulação simplificada: checar bounds
-        in_bounds = (0 <= x <= self.config.container_width and
-                    0 <= y <= self.config.container_height)
-        
-        # Simular colisão (aleatório para teste)
-        collides = np.random.random() < 0.1  # 10% chance de colisão
-        
-        if not in_bounds or collides:
-            # Colocação inválida
+        try:
+            # Rotacionar peça
+            rotated_piece = piece.rotate(rotation)
+            
+            # Mover para posição desejada
+            moved_piece = rotated_piece.set_position(x, y)
+            
+            # Verificar se está dentro do container
+            if not self.container.shapely.contains(moved_piece.shapely):
+                return False, self.config.invalid_placement_penalty, {
+                    'placement_status': 'invalid',
+                    'reason': 'out_of_bounds',
+                    'position': (x, y),
+                    'rotation': rotation
+                }
+            
+            # Verificar colisões com peças já colocadas
+            for placed in self.placed_pieces:
+                if moved_piece.intersects(placed):
+                    return False, self.config.invalid_placement_penalty, {
+                        'placement_status': 'invalid',
+                        'reason': 'collision',
+                        'position': (x, y),
+                        'rotation': rotation
+                    }
+            
+            # Colocação válida!
+            self.placed_pieces.append(moved_piece)
+            
+            # Calcular recompensa
+            reward = self.config.valid_placement_reward
+            
+            # Bônus se toca outras peças (economiza espaço)
+            if len(self.placed_pieces) > 1:
+                touching = False
+                for placed in self.placed_pieces[:-1]:  # Todas exceto a recém colocada
+                    distance = moved_piece.distance_to(placed)
+                    if distance < self.config.spacing:
+                        touching = True
+                        break
+                
+                if touching:
+                    reward += self.config.touching_bonus
+            
+            # Bônus se colocou perto do canto inferior esquerdo
+            if x < 100 and y < 100:
+                reward += self.config.corner_bonus
+            
+            # Recompensa de progresso
+            reward += self.config.progress_reward
+            
+            return True, reward, {
+                'placement_status': 'valid',
+                'position': (x, y),
+                'rotation': rotation
+            }
+            
+        except Exception as e:
+            # Se der qualquer erro, considerar colocação inválida
+            print(f"Warning: Error in _place_piece: {e}")
             return False, self.config.invalid_placement_penalty, {
                 'placement_status': 'invalid',
-                'reason': 'out_of_bounds' if not in_bounds else 'collision'
+                'reason': 'error',
+                'error': str(e)
             }
-        
-        # Colocação válida!
-        # self.placed_pieces.append(moved_piece)
-        
-        # Simular colocação (placeholder)
-        self.placed_pieces.append({
-            'x': x,
-            'y': y,
-            'rotation': rotation,
-            'piece_idx': self.current_piece_idx
-        })
-        
-        # Calcular recompensa
-        reward = self.config.valid_placement_reward
-        
-        # Bônus se toca outras peças
-        if len(self.placed_pieces) > 1:
-            # Simulação: 30% chance de tocar
-            if np.random.random() < 0.3:
-                reward += self.config.touching_bonus
-        
-        # Bônus se perto do canto
-        if x < 100 and y < 100:
-            reward += self.config.corner_bonus
-        
-        # Recompensa de progresso
-        reward += self.config.progress_reward
-        
-        return True, reward, {
-            'placement_status': 'valid',
-            'position': (x, y),
-            'rotation': rotation
-        }
     
     def _get_observation(self) -> Dict:
        # """Constrói observação do estado atual"""
@@ -340,50 +364,46 @@ class NestingEnvironment(gym.Env):
             'stats': stats
         }
     
-    def _render_layout_as_image(self) -> np.ndarray:
-        # """
-        # Renderiza layout como imagem 6-channel.
+    def _render_layout_as_image(self):
+
+        #"""Renderiza layout como imagem 6-channel (VERSÃO REAL)"""
+        from src.representation.image_encoder import render_layout_as_image
         
-        # Returns:
-        #     array (6, 256, 256) float32
-        # """
-        size = self.config.image_size
-        image = np.zeros((6, size, size), dtype=np.float32)
+        # Próxima peça
+        next_piece = None
+        if self.current_piece_idx < len(self.pieces_to_place):
+            next_piece = self.pieces_to_place[self.current_piece_idx]
         
-        # SIMULAÇÃO: preencher com padrão aleatório
-        # Na implementação real, renderizar peças geometricamente
-        
-        # Canal 0: Ocupação
-        for piece_info in self.placed_pieces:
-            # Simular peça como círculo
-            cx = int(piece_info['x'] / self.config.container_width * size)
-            cy = int(piece_info['y'] / self.config.container_height * size)
-            radius = 10
-            
-            y_grid, x_grid = np.ogrid[:size, :size]
-            mask = (x_grid - cx)**2 + (y_grid - cy)**2 <= radius**2
-            image[0][mask] = 1.0
-        
-        # Canal 1: Bordas (simplificado)
-        # Canal 2: Distâncias (simplificado)
-        # Canal 3: Próxima peça (simplificado)
-        # Canal 4: Densidade (simplificado)
-        # Canal 5: Acessibilidade (simplificado)
-        
-        # Para teste, preencher canais com dados sintéticos
-        image[1] = np.random.rand(size, size) * 0.1
-        image[2] = np.random.rand(size, size) * 0.2
-        image[3] = np.random.rand(size, size) * 0.3 if self.current_piece_idx < len(self.pieces_to_place) else 0
-        image[4] = np.random.rand(size, size) * 0.1
-        image[5] = np.random.rand(size, size) * 0.1
+        # Renderizar
+        image = render_layout_as_image(
+            container=self.container,
+            placed_pieces=self.placed_pieces,
+            next_piece=next_piece,
+            size=self.config.image_size
+        )
         
         return image
     
     def _extract_piece_features(self, piece) -> np.ndarray:
         #"""Extrai features de uma peça"""
-        # SIMULAÇÃO: features aleatórias
-        # Na implementação real, extrair de piece.area, piece.perimeter, etc.
-        return np.random.rand(10).astype(np.float32)
+        if piece is None:
+            return np.zeros(10, dtype=np.float32)
+    
+        # Features reais da peça
+        features = np.array([
+            piece.area / 10000.0,              # Normalizado
+            piece.perimeter / 500.0,
+            piece.width / 200.0,
+            piece.height / 200.0,
+            piece.aspect_ratio,
+            piece.calculate_complexity() / 10.0,
+            len(piece.vertices) / 20.0,
+            piece.rotation / 360.0,
+            1.0,  # placeholder
+            1.0,  # placeholder
+        ], dtype=np.float32)
+        
+        return features
     
     def _extract_remaining_features(self) -> np.ndarray:
         #"""Features agregadas das peças restantes"""
@@ -398,12 +418,18 @@ class NestingEnvironment(gym.Env):
     
     def _calculate_utilization(self) -> float:
         #"""Calcula taxa de utilização"""
-        # SIMULAÇÃO
         if len(self.placed_pieces) == 0:
             return 0.0
+    
+        # Área total das peças colocadas
+        total_pieces_area = sum(piece.area for piece in self.placed_pieces)
         
-        # Na implementação real: (soma áreas peças) / (área container)
-        utilization = len(self.placed_pieces) / len(self.pieces_to_place) * 0.85
+        # Área do container
+        container_area = self.container.area
+        
+        # Utilização
+        utilization = total_pieces_area / container_area
+        
         return min(utilization, 1.0)
     
     def _get_info(self) -> Dict:
@@ -423,8 +449,16 @@ class NestingEnvironment(gym.Env):
         #     self.config.container_height,
         #     center=(self.config.container_width/2, self.config.container_height/2)
         # )
-        return {'width': self.config.container_width, 
-                'height': self.config.container_height}
+        # return {'width': self.config.container_width, 
+        #         'height': self.config.container_height}
+
+        container = create_rectangle(
+            self.config.container_width,
+            self.config.container_height,
+            center=(self.config.container_width/2, self.config.container_height/2)
+        )
+    
+        return container
     
     def _generate_random_pieces(self) -> List:
         #"""Gera peças aleatórias para teste"""
@@ -443,8 +477,19 @@ class NestingEnvironment(gym.Env):
             # pieces.append(piece)
             
             # PLACEHOLDER
-            pieces.append({'id': i, 'area': np.random.uniform(100, 500)})
-        
+            n_pieces = np.random.randint(5, 15)
+        pieces = []
+    
+        for i in range(n_pieces):
+            piece = create_random_polygon(
+                n_vertices=np.random.randint(4, 10),
+                radius=np.random.uniform(20, 50),
+                irregularity=0.5,
+                spikeyness=0.3
+            )
+            piece.id = i
+            pieces.append(piece)
+    
         return pieces
     
     def render(self):

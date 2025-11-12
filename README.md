@@ -1,4 +1,4 @@
-# intelligent-nesting
+venv# intelligent-nesting
 # Guia de Instalação
 
 ## 1. Clonar o Repositório
@@ -36,7 +36,7 @@ pip install -e ".[dev,viz]"
 ```bash
 # Para CUDA 11.8
 pip install torch-geometric
-pip install pyg-lib torch-scatter torch-sparse torch-cluster -f https://data.pyg.org/whl/torch-2.0.0+cu118.html
+pip install pyg-lib torch-scatter torch-sparse torch-cluster -f https://data.pyg.org/whl/torch-2.9.0+cu118.html
 
 # Para CPU apenas
 pip install torch-geometric
