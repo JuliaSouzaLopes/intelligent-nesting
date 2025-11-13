@@ -203,6 +203,7 @@ class PPOTrainer:
         self.env = env
         self.agent = agent
         self.config = config
+        self.curriculum = None  # Será injetado
         
         # Otimizador
         self.optimizer = optim.Adam(
@@ -247,6 +248,18 @@ class PPOTrainer:
             # Treinar com PPO
             stats = self._update_policy(trajectories, advantages, returns)
             
+            # Atualizar curriculum
+            if self.curriculum and len(self.episode_utilizations) > 0:
+                last_util = self.episode_utilizations[-1]
+                success = last_util > 0.3
+                self.curriculum.record_episode(last_util, success)
+                
+                if self.curriculum.should_advance(min_episodes=50):
+                    self.curriculum.advance_stage()
+                    self.writer.add_scalar('curriculum/stage', 
+                                        self.curriculum.current_stage.stage_id,
+                                        iteration)
+            
             # Logging
             if iteration % self.config['log_frequency'] == 0:
                 self._log_stats(iteration, stats)
@@ -265,7 +278,20 @@ class PPOTrainer:
         
         self.writer.close()
     
-    def _collect_trajectories(self) -> Dict:
+    def _collect_trajectories(self, pieces=None):
+
+        # Gerar problema do curriculum se disponível
+        if self.curriculum and pieces is None:
+            problem = self.curriculum.generate_problem()
+            pieces = problem['pieces']
+            # Atualizar tamanho do container
+            self.env.config.container_width = problem['container_size'][0]
+            self.env.config.container_height = problem['container_size'][1]
+        
+        # Reset com peças
+        reset_options = {'pieces': pieces} if pieces else None
+        observation, _ = self.env.reset(options=reset_options)
+
         #"""Coleta trajetórias interagindo com o ambiente"""
         trajectories = {
             'observations': [],
@@ -458,7 +484,7 @@ class PPOTrainer:
         return {k: np.mean(v) for k, v in stats.items()}
     
     def _evaluate(self, n_episodes: int = 5) -> Dict:
-        """Avalia política atual"""
+        #"""Avalia política atual"""
         eval_rewards = []
         eval_lengths = []
         eval_utilizations = []
@@ -499,7 +525,7 @@ class PPOTrainer:
         }
     
     def _log_stats(self, iteration: int, stats: Dict):
-        """Logging de estatísticas"""
+        #"""Logging de estatísticas"""
         print(f"\nIteration {iteration}/{self.config['n_iterations']}")
         print(f"  Policy Loss: {stats['policy_loss']:.4f}")
         print(f"  Value Loss: {stats['value_loss']:.4f}")
@@ -518,7 +544,7 @@ class PPOTrainer:
             self.writer.add_scalar('train/episode_reward', np.mean(recent_rewards), iteration)
     
     def _log_eval(self, iteration: int, stats: Dict):
-        """Logging de avaliação"""
+        #"""Logging de avaliação"""
         print(f"\n  [EVAL] Utilization: {stats['utilization_mean']*100:.2f}% ± {stats['utilization_std']*100:.2f}%")
         print(f"  [EVAL] Reward: {stats['reward_mean']:.2f} ± {stats['reward_std']:.2f}")
         
@@ -526,7 +552,7 @@ class PPOTrainer:
             self.writer.add_scalar(f'eval/{key}', value, iteration)
     
     def _save_checkpoint(self, iteration: int):
-        """Salva checkpoint"""
+        #"""Salva checkpoint"""
         checkpoint_dir = Path(self.config['checkpoint_dir'])
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
@@ -542,7 +568,7 @@ class PPOTrainer:
         print(f"  ✓ Checkpoint salvo: {checkpoint_path}")
     
     def _obs_to_tensors(self, observation: Dict) -> Dict:
-        """Converte observação para tensors"""
+        #"""Converte observação para tensors"""
         return {
             'layout_image': torch.tensor(observation['layout_image'], dtype=torch.float32).unsqueeze(0),
             'current_piece': torch.tensor(observation['current_piece'], dtype=torch.float32).unsqueeze(0),
@@ -551,7 +577,7 @@ class PPOTrainer:
         }
     
     def _batch_observations(self, observations: List[Dict]) -> Dict:
-        """Agrupa observações em batch"""
+        #"""Agrupa observações em batch"""
         return {
             'layout_image': torch.stack([torch.tensor(obs['layout_image'], dtype=torch.float32) for obs in observations]),
             'current_piece': torch.stack([torch.tensor(obs['current_piece'], dtype=torch.float32) for obs in observations]),
@@ -560,7 +586,7 @@ class PPOTrainer:
         }
     
     def _batch_actions(self, actions: List[Dict]) -> Dict:
-        """Agrupa ações em batch"""
+        #"""Agrupa ações em batch"""
         return {
             'position': torch.tensor([a['position'] for a in actions], dtype=torch.float32),
             'rotation': torch.tensor([a['rotation'] for a in actions], dtype=torch.long)
@@ -599,8 +625,9 @@ def main():
     print("Configuração carregada")
     
     # Criar ambiente (placeholder - usar implementação real)
-    # env_config = NestingConfig()
-    # env = NestingEnvironment(config=env_config)
+    env_config = NestingConfig()
+
+    env = NestingEnvironment(config=env_config)
     
     # Para teste, usar ambiente dummy
     print("Ambiente: SIMULADO (implementar NestingEnvironment real)")
@@ -611,6 +638,23 @@ def main():
         hidden_dim=512,
         rotation_bins=36
     )
+
+    # Criar curriculum
+    curriculum = CurriculumScheduler(
+        base_container_size=(1000, 600),
+        auto_advance=True,
+        advancement_threshold=0.6
+    )
+    print(f"✓ Curriculum: {curriculum.current_stage.name}")
+    
+    # Criar trainer
+    trainer = PPOTrainer(env, agent, config)
+    
+    # Injetar curriculum no trainer
+    trainer.curriculum = curriculum
+    
+    # Treinar
+    trainer.train(config['n_iterations'])
     
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     agent = agent.to(device)
@@ -618,15 +662,9 @@ def main():
     print(f"Agente criado e movido para {device}")
     print(f"Parâmetros: {sum(p.numel() for p in agent.parameters()):,}")
     
-    # Criar trainer
-    # trainer = PPOTrainer(env, agent, config)
-    
-    # Treinar
-    # trainer.train(config['n_iterations'])
-    
     print("\n✓ Script de treinamento implementado!")
     print("  Para treinar de verdade, descomentar código acima e implementar módulos reais")
 
 
-if __name__ == "__main__":
-    main()
+    if __name__ == "__main__":
+        main()
