@@ -24,7 +24,7 @@ from src.environment.nesting_env import NestingEnvironment, NestingConfig
 from src.geometry.polygon import create_rectangle, create_random_polygon
 
 # Importar modelo do train_2gb_gpu.py
-from train_2gb_gpu import (
+from scripts.train_2gb_gpu import (
     TinyActorCritic, 
     RolloutBuffer, 
     TinyPPOTrainer

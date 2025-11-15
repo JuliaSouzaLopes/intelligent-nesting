@@ -186,7 +186,7 @@ class NestingSystem:
     
     def _load_model(self, checkpoint_path: str):
         #"""Carrega modelo do checkpoint"""
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
         
         # Detectar qual tipo de modelo foi treinado
         state_dict = checkpoint['agent_state_dict']
@@ -196,7 +196,7 @@ class NestingSystem:
         
         if n_params < 1e6:  # Modelo pequeno (TinyActorCritic)
             print(f"  Detectado: Modelo Leve (~{n_params/1e6:.1f}M params)")
-            from scripts.train_2gb_gpu import TinyActorCritic
+            from train_2gb_gpu import TinyActorCritic
             agent = TinyActorCritic(
                 embedding_dim=64,
                 hidden_dim=128,
