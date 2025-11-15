@@ -1,0 +1,90 @@
+{
+  "description": "Exemplo de arquivo de peças para nesting",
+  "units": "millimeters",
+  "pieces": [
+    {
+      "id": 0,
+      "name": "Retângulo Grande",
+      "vertices": [
+        [0, 0],
+        [150, 0],
+        [150, 100],
+        [0, 100]
+      ]
+    },
+    {
+      "id": 1,
+      "name": "Retângulo Médio",
+      "vertices": [
+        [0, 0],
+        [120, 0],
+        [120, 80],
+        [0, 80]
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Retângulo Longo",
+      "vertices": [
+        [0, 0],
+        [180, 0],
+        [180, 90],
+        [0, 90]
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Retângulo Pequeno",
+      "vertices": [
+        [0, 0],
+        [100, 0],
+        [100, 70],
+        [0, 70]
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Retângulo Alto",
+      "vertices": [
+        [0, 0],
+        [140, 0],
+        [140, 110],
+        [0, 110]
+      ]
+    },
+    {
+      "id": 5,
+      "name": "L-Shape",
+      "vertices": [
+        [0, 0],
+        [100, 0],
+        [100, 50],
+        [50, 50],
+        [50, 100],
+        [0, 100]
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Trapézio",
+      "vertices": [
+        [0, 0],
+        [120, 0],
+        [100, 60],
+        [20, 60]
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Hexágono",
+      "vertices": [
+        [50, 0],
+        [100, 25],
+        [100, 75],
+        [50, 100],
+        [0, 75],
+        [0, 25]
+      ]
+    }
+  ]
+}

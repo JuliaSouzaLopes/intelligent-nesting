@@ -1,433 +1,391 @@
 # """
 # src/training/curriculum.py
 
-# Curriculum Learning: Aumenta gradualmente a dificuldade do problema.
+# Curriculum Learning: Aumenta progressivamente a dificuldade do treinamento.
 
-# Progressão:
-# - Número de peças: 3 → 50
-# - Complexidade: retângulos → polígonos irregulares
-# - Tamanho do container: grande → realista
+# Estratégias:
+# 1. Número de peças: 3 → 50
+# 2. Complexidade das peças: retângulos → polígonos irregulares
+# 3. Tamanho do container: pequeno → grande
 # """
 
 import numpy as np
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from src.geometry.polygon import (
-    Polygon, create_rectangle, create_regular_polygon, create_random_polygon
-)
 
 
 @dataclass
 class CurriculumStage:
-    #"""Define um estágio do curriculum"""
-    stage_id: int
+    #"""Define uma etapa do curriculum"""
     name: str
-    n_pieces_min: int
-    n_pieces_max: int
-    complexity: str  # 'rectangles', 'regular', 'mixed', 'irregular'
-    container_scale: float  # Multiplica tamanho base
-    piece_size_range: Tuple[float, float]  # (min, max) para dimensões
-    rotation_enabled: bool
-    min_utilization_target: float  # Utilização mínima para avançar
+    n_pieces_range: Tuple[int, int]
+    piece_complexity: str  # 'rectangles', 'regular', 'mixed', 'irregular'
+    container_size: float  # Multiplicador do tamanho base
+    rotation_difficulty: str  # 'none', 'discrete', 'continuous'
+    success_threshold: float  # Utilização mínima para avançar
 
 
 class CurriculumScheduler:
     # """
-    # Gerencia progressão do curriculum learning.
+    # Gerencia o curriculum de treinamento.
     
-    # Aumenta dificuldade baseado em performance.
+    # Aumenta dificuldade baseado no desempenho do agente.
     # """
     
-    def __init__(self,
-                 base_container_size: Tuple[float, float] = (1000, 600),
-                 auto_advance: bool = True,
-                 advancement_threshold: float = 0.6):
+    def __init__(self, config: dict):
         # """
         # Args:
-        #     base_container_size: Tamanho base do container (width, height)
-        #     auto_advance: Se True, avança automaticamente ao atingir threshold
-        #     advancement_threshold: Utilização mínima para avançar de estágio
+        #     config: Configuração do curriculum
         # """
-        self.base_container_size = base_container_size
-        self.auto_advance = auto_advance
-        self.advancement_threshold = advancement_threshold
+        self.config = config
+        self.current_stage = 0
+        self.stage_episodes = 0
+        self.stage_successes = 0
         
         # Definir estágios
-        self.stages = self._define_stages()
+        self.stages = self._create_stages()
         
-        # Estado atual
-        self.current_stage_idx = 0
-        self.episode_count = 0
-        self.stage_episode_count = 0
-        
-        # Estatísticas
-        self.stage_utilizations: List[float] = []
-        self.stage_success_rate: List[float] = []
+        # Histórico
+        self.history = []
     
-    def _define_stages(self) -> List[CurriculumStage]:
-        #"""Define os estágios do curriculum"""
+    def _create_stages(self) -> List[CurriculumStage]:
+        #"""Cria estágios do curriculum"""
         stages = [
-            # Estágio 1: Muito Fácil - Retângulos pequenos
+            # Estágio 1: Muito fácil
             CurriculumStage(
-                stage_id=1,
-                name="Warm-up: Poucos Retângulos",
-                n_pieces_min=3,
-                n_pieces_max=5,
-                complexity='rectangles',
-                container_scale=1.5,  # Container maior
-                piece_size_range=(30, 60),
-                rotation_enabled=False,
-                min_utilization_target=0.50
+                name="Stage 1: Retângulos simples",
+                n_pieces_range=(3, 5),
+                piece_complexity='rectangles',
+                container_size=1.5,
+                rotation_difficulty='none',
+                success_threshold=0.60
             ),
             
-            # Estágio 2: Fácil - Mais retângulos
+            # Estágio 2: Adicionar rotação
             CurriculumStage(
-                stage_id=2,
-                name="Basic: Retângulos com Rotação",
-                n_pieces_min=5,
-                n_pieces_max=8,
-                complexity='rectangles',
-                container_scale=1.3,
-                piece_size_range=(25, 55),
-                rotation_enabled=True,
-                min_utilization_target=0.55
+                name="Stage 2: Retângulos com rotação",
+                n_pieces_range=(4, 7),
+                piece_complexity='rectangles',
+                container_size=1.3,
+                rotation_difficulty='discrete',
+                success_threshold=0.65
             ),
             
-            # Estágio 3: Médio - Polígonos regulares
+            # Estágio 3: Mais peças
             CurriculumStage(
-                stage_id=3,
-                name="Intermediate: Polígonos Regulares",
-                n_pieces_min=8,
-                n_pieces_max=12,
-                complexity='regular',
-                container_scale=1.2,
-                piece_size_range=(20, 50),
-                rotation_enabled=True,
-                min_utilization_target=0.60
+                name="Stage 3: Mais retângulos",
+                n_pieces_range=(7, 12),
+                piece_complexity='rectangles',
+                container_size=1.2,
+                rotation_difficulty='discrete',
+                success_threshold=0.70
             ),
             
-            # Estágio 4: Médio-Difícil - Mix
+            # Estágio 4: Polígonos regulares
             CurriculumStage(
-                stage_id=4,
-                name="Advanced: Mix de Formas",
-                n_pieces_min=12,
-                n_pieces_max=18,
-                complexity='mixed',
-                container_scale=1.1,
-                piece_size_range=(20, 45),
-                rotation_enabled=True,
-                min_utilization_target=0.65
+                name="Stage 4: Polígonos regulares",
+                n_pieces_range=(5, 10),
+                piece_complexity='regular',
+                container_size=1.2,
+                rotation_difficulty='discrete',
+                success_threshold=0.65
             ),
             
-            # Estágio 5: Difícil - Irregulares
+            # Estágio 5: Mix
             CurriculumStage(
-                stage_id=5,
-                name="Expert: Polígonos Irregulares",
-                n_pieces_min=18,
-                n_pieces_max=25,
-                complexity='irregular',
-                container_scale=1.0,
-                piece_size_range=(15, 40),
-                rotation_enabled=True,
-                min_utilization_target=0.70
+                name="Stage 5: Mix de peças",
+                n_pieces_range=(8, 15),
+                piece_complexity='mixed',
+                container_size=1.1,
+                rotation_difficulty='discrete',
+                success_threshold=0.70
             ),
             
-            # Estágio 6: Muito Difícil - Produção
+            # Estágio 6: Irregular
             CurriculumStage(
-                stage_id=6,
-                name="Production: Problema Realista",
-                n_pieces_min=25,
-                n_pieces_max=50,
-                complexity='irregular',
-                container_scale=1.0,
-                piece_size_range=(10, 35),
-                rotation_enabled=True,
-                min_utilization_target=0.75
+                name="Stage 6: Polígonos irregulares",
+                n_pieces_range=(10, 20),
+                piece_complexity='irregular',
+                container_size=1.0,
+                rotation_difficulty='discrete',
+                success_threshold=0.75
+            ),
+            
+            # Estágio 7: Difícil
+            CurriculumStage(
+                name="Stage 7: Muitas peças irregulares",
+                n_pieces_range=(20, 35),
+                piece_complexity='irregular',
+                container_size=1.0,
+                rotation_difficulty='discrete',
+                success_threshold=0.75
+            ),
+            
+            # Estágio 8: Muito difícil
+            CurriculumStage(
+                name="Stage 8: Máximo desafio",
+                n_pieces_range=(30, 50),
+                piece_complexity='irregular',
+                container_size=1.0,
+                rotation_difficulty='continuous',
+                success_threshold=0.80
             ),
         ]
+        
         return stages
     
-    @property
-    def current_stage(self) -> CurriculumStage:
+    def get_current_stage(self) -> CurriculumStage:
         #"""Retorna estágio atual"""
-        return self.stages[self.current_stage_idx]
+        return self.stages[self.current_stage]
     
-    def generate_problem(self) -> Dict:
+    def should_advance(self) -> bool:
         # """
-        # Gera um problema de acordo com o estágio atual.
+        # Verifica se deve avançar para próximo estágio.
+        
+        # Critério: Taxa de sucesso nas últimas N tentativas
+        # """
+        min_episodes = self.config.get('min_episodes_per_stage', 100)
+        
+        if self.stage_episodes < min_episodes:
+            return False
+        
+        success_rate = self.stage_successes / max(self.stage_episodes, 1)
+        threshold = self.stages[self.current_stage].success_threshold
+        
+        return success_rate >= threshold
+    
+    def advance_stage(self):
+        #"""Avança para próximo estágio"""
+        if self.current_stage < len(self.stages) - 1:
+            old_stage = self.current_stage
+            self.current_stage += 1
+            
+            # Reset contadores
+            self.stage_episodes = 0
+            self.stage_successes = 0
+            
+            print("="*70)
+            print(f"🎓 CURRICULUM ADVANCEMENT!")
+            print(f"   {self.stages[old_stage].name}")
+            print(f"   ↓")
+            print(f"   {self.stages[self.current_stage].name}")
+            print("="*70)
+    
+    def update(self, utilization: float):
+        # """
+        # Atualiza curriculum com resultado de episódio.
+        
+        # Args:
+        #     utilization: Utilização alcançada (0-1)
+        # """
+        self.stage_episodes += 1
+        
+        # Considerar sucesso se atingiu threshold
+        if utilization >= self.stages[self.current_stage].success_threshold:
+            self.stage_successes += 1
+        
+        # Salvar histórico
+        self.history.append({
+            'stage': self.current_stage,
+            'episode': self.stage_episodes,
+            'utilization': utilization
+        })
+        
+        # Verificar se deve avançar
+        if self.should_advance():
+            self.advance_stage()
+    
+    def get_problem_config(self) -> Dict:
+        # """
+        # Gera configuração do problema para o estágio atual.
         
         # Returns:
-        #     Dict contendo:
-        #         - pieces: Lista de Polygon
-        #         - container_size: (width, height)
-        #         - stage_info: Informações do estágio
+        #     Dict com configuração para gerar problema
         # """
-        stage = self.current_stage
+        stage = self.get_current_stage()
         
-        # Número de peças
-        n_pieces = np.random.randint(stage.n_pieces_min, stage.n_pieces_max + 1)
-        
-        # Gerar peças
-        pieces = self._generate_pieces(
-            n_pieces=n_pieces,
-            complexity=stage.complexity,
-            size_range=stage.piece_size_range,
-            rotation_enabled=stage.rotation_enabled
-        )
-        
-        # Tamanho do container
-        base_w, base_h = self.base_container_size
-        container_size = (
-            base_w * stage.container_scale,
-            base_h * stage.container_scale
+        # Número de peças (aleatório no range)
+        n_pieces = np.random.randint(
+            stage.n_pieces_range[0],
+            stage.n_pieces_range[1] + 1
         )
         
         return {
-            'pieces': pieces,
-            'container_size': container_size,
-            'stage_info': {
-                'stage_id': stage.stage_id,
-                'stage_name': stage.name,
-                'n_pieces': n_pieces,
-                'complexity': stage.complexity
-            }
+            'n_pieces': n_pieces,
+            'piece_complexity': stage.piece_complexity,
+            'container_multiplier': stage.container_size,
+            'rotation_difficulty': stage.rotation_difficulty
         }
     
-    def _generate_pieces(self,
-                        n_pieces: int,
-                        complexity: str,
-                        size_range: Tuple[float, float],
-                        rotation_enabled: bool) -> List[Polygon]:
-        #"""Gera peças de acordo com complexidade"""
+    def generate_pieces(self, config: Dict) -> List:
+        # """
+        # Gera peças baseado na configuração do curriculum.
+        
+        # Args:
+        #     config: Configuração retornada por get_problem_config()
+        
+        # Returns:
+        #     Lista de peças (Polygons)
+        # """
+        from src.geometry.polygon import (
+            create_rectangle, 
+            create_regular_polygon,
+            create_random_polygon
+        )
+        
+        n_pieces = config['n_pieces']
+        complexity = config['piece_complexity']
+        
         pieces = []
-        min_size, max_size = size_range
         
         for i in range(n_pieces):
-            # Tamanho aleatório
-            size = np.random.uniform(min_size, max_size)
-            
-            # Criar peça baseado na complexidade
             if complexity == 'rectangles':
-                # Retângulos com aspect ratio variado
-                aspect = np.random.uniform(0.5, 2.0)
-                width = size
-                height = size / aspect
+                # Apenas retângulos
+                width = np.random.uniform(30, 80)
+                height = np.random.uniform(20, 60)
                 piece = create_rectangle(width, height)
                 
             elif complexity == 'regular':
-                # Polígonos regulares (triângulo a octógono)
-                n_sides = np.random.choice([3, 4, 5, 6, 8])
-                piece = create_regular_polygon(n_sides, radius=size/2)
+                # Polígonos regulares
+                n_sides = np.random.choice([4, 5, 6, 8])
+                radius = np.random.uniform(20, 40)
+                piece = create_regular_polygon(n_sides, radius)
                 
             elif complexity == 'mixed':
-                # 50% retângulos, 50% regulares
+                # Mix: 50% retângulos, 50% regulares
                 if np.random.rand() < 0.5:
-                    aspect = np.random.uniform(0.5, 2.0)
-                    width = size
-                    height = size / aspect
+                    width = np.random.uniform(30, 70)
+                    height = np.random.uniform(20, 50)
                     piece = create_rectangle(width, height)
                 else:
-                    n_sides = np.random.choice([3, 4, 5, 6])
-                    piece = create_regular_polygon(n_sides, radius=size/2)
+                    n_sides = np.random.choice([5, 6, 8])
+                    radius = np.random.uniform(20, 35)
+                    piece = create_regular_polygon(n_sides, radius)
                     
             elif complexity == 'irregular':
                 # Polígonos irregulares
                 n_vertices = np.random.randint(5, 10)
-                irregularity = np.random.uniform(0.3, 0.7)
-                spikeyness = np.random.uniform(0.2, 0.5)
+                radius = np.random.uniform(20, 40)
+                irregularity = np.random.uniform(0.4, 0.8)
+                spikeyness = np.random.uniform(0.3, 0.6)
                 
                 piece = create_random_polygon(
                     n_vertices=n_vertices,
-                    radius=size/2,
+                    radius=radius,
                     irregularity=irregularity,
                     spikeyness=spikeyness
                 )
             else:
-                raise ValueError(f"Unknown complexity: {complexity}")
-            
-            # Aplicar rotação inicial se habilitada
-            if rotation_enabled:
-                initial_rotation = np.random.uniform(0, 360)
-                piece = piece.rotate(initial_rotation)
+                # Fallback: retângulo
+                piece = create_rectangle(50, 30)
             
             piece.id = i
             pieces.append(piece)
         
         return pieces
     
-    def record_episode(self, utilization: float, success: bool):
-        # """
-        # Registra resultado de um episódio.
-        
-        # Args:
-        #     utilization: Taxa de utilização alcançada
-        #     success: Se conseguiu colocar todas as peças
-        # """
-        self.episode_count += 1
-        self.stage_episode_count += 1
-        
-        self.stage_utilizations.append(utilization)
-        self.stage_success_rate.append(1.0 if success else 0.0)
-        
-        # Limitar histórico
-        max_history = 100
-        if len(self.stage_utilizations) > max_history:
-            self.stage_utilizations = self.stage_utilizations[-max_history:]
-            self.stage_success_rate = self.stage_success_rate[-max_history:]
-    
-    def should_advance(self, min_episodes: int = 50) -> bool:
-        # """
-        # Verifica se deve avançar para próximo estágio.
-        
-        # Args:
-        #     min_episodes: Mínimo de episódios antes de poder avançar
-            
-        # Returns:
-        #     True se deve avançar
-        # """
-        if not self.auto_advance:
-            return False
-        
-        if self.current_stage_idx >= len(self.stages) - 1:
-            return False  # Já no último estágio
-        
-        if self.stage_episode_count < min_episodes:
-            return False  # Precisa mais episódios
-        
-        # Calcular performance recente
-        recent_window = 50
-        if len(self.stage_utilizations) < recent_window:
-            return False
-        
-        recent_util = np.mean(self.stage_utilizations[-recent_window:])
-        recent_success = np.mean(self.stage_success_rate[-recent_window:])
-        
-        # Critérios para avanço
-        target_util = self.current_stage.min_utilization_target
-        
-        should_advance = (
-            recent_util >= target_util and
-            recent_success >= 0.8  # 80% de sucesso
-        )
-        
-        return should_advance
-    
-    def advance_stage(self):
-        #"""Avança para próximo estágio"""
-        if self.current_stage_idx < len(self.stages) - 1:
-            self.current_stage_idx += 1
-            self.stage_episode_count = 0
-            self.stage_utilizations = []
-            self.stage_success_rate = []
-            
-            print(f"\n{'='*70}")
-            print(f"🎓 CURRICULUM ADVANCE!")
-            print(f"{'='*70}")
-            print(f"Novo estágio: {self.current_stage.name}")
-            print(f"Stage {self.current_stage.stage_id}/{len(self.stages)}")
-            print(f"{'='*70}\n")
-    
     def get_stats(self) -> Dict:
         #"""Retorna estatísticas do curriculum"""
-        recent_window = min(50, len(self.stage_utilizations))
-        
-        if recent_window > 0:
-            recent_util = np.mean(self.stage_utilizations[-recent_window:])
-            recent_success = np.mean(self.stage_success_rate[-recent_window:])
-        else:
-            recent_util = 0.0
-            recent_success = 0.0
+        stage = self.get_current_stage()
         
         return {
-            'current_stage': self.current_stage.stage_id,
-            'stage_name': self.current_stage.name,
-            'total_episodes': self.episode_count,
-            'stage_episodes': self.stage_episode_count,
-            'recent_utilization': recent_util,
-            'recent_success_rate': recent_success,
-            'target_utilization': self.current_stage.min_utilization_target,
-            'can_advance': self.should_advance()
+            'current_stage': self.current_stage,
+            'stage_name': stage.name,
+            'stage_episodes': self.stage_episodes,
+            'stage_successes': self.stage_successes,
+            'success_rate': self.stage_successes / max(self.stage_episodes, 1),
+            'total_stages': len(self.stages)
         }
     
-    def reset(self):
-        #"""Reseta curriculum para estágio inicial"""
-        self.current_stage_idx = 0
-        self.episode_count = 0
-        self.stage_episode_count = 0
-        self.stage_utilizations = []
-        self.stage_success_rate = []
+    def save_state(self, path: str):
+        """Salva estado do curriculum"""
+        import pickle
+        
+        state = {
+            'current_stage': self.current_stage,
+            'stage_episodes': self.stage_episodes,
+            'stage_successes': self.stage_successes,
+            'history': self.history
+        }
+        
+        with open(path, 'wb') as f:
+            pickle.dump(state, f)
+    
+    def load_state(self, path: str):
+        """Carrega estado do curriculum"""
+        import pickle
+        
+        with open(path, 'rb') as f:
+            state = pickle.load(f)
+        
+        self.current_stage = state['current_stage']
+        self.stage_episodes = state['stage_episodes']
+        self.stage_successes = state['stage_successes']
+        self.history = state['history']
 
 
 # =============================================================================
-# EXEMPLO DE USO
+# Exemplo de Uso
 # =============================================================================
 
 if __name__ == "__main__":
     print("="*70)
-    print("TESTE: CURRICULUM LEARNING")
+    print("TESTE: CURRICULUM SCHEDULER")
     print("="*70)
     
     # Criar scheduler
-    curriculum = CurriculumScheduler(
-        base_container_size=(1000, 600),
-        auto_advance=True,
-        advancement_threshold=0.6
-    )
+    config = {
+        'min_episodes_per_stage': 10
+    }
+    
+    curriculum = CurriculumScheduler(config)
     
     print(f"\n✓ Curriculum criado com {len(curriculum.stages)} estágios")
-    print(f"Estágio inicial: {curriculum.current_stage.name}")
     
-    # Gerar alguns problemas
+    # Mostrar todos os estágios
     print("\n" + "="*70)
-    print("GERANDO PROBLEMAS")
+    print("ESTÁGIOS DO CURRICULUM")
     print("="*70)
     
-    for i in range(5):
-        problem = curriculum.generate_problem()
+    for i, stage in enumerate(curriculum.stages):
+        print(f"\n{i+1}. {stage.name}")
+        print(f"   Peças: {stage.n_pieces_range[0]}-{stage.n_pieces_range[1]}")
+        print(f"   Complexidade: {stage.piece_complexity}")
+        print(f"   Threshold: {stage.success_threshold*100:.0f}%")
+    
+    # Simular progresso
+    print("\n" + "="*70)
+    print("SIMULAÇÃO DE PROGRESSO")
+    print("="*70)
+    
+    for episode in range(50):
+        # Simular utilização (melhora gradualmente)
+        utilization = 0.5 + 0.01 * episode + np.random.uniform(-0.05, 0.05)
+        utilization = np.clip(utilization, 0, 1)
+        
+        curriculum.update(utilization)
+        
+        if episode % 10 == 0:
+            stats = curriculum.get_stats()
+            print(f"\nEpisode {episode}:")
+            print(f"  Stage: {stats['stage_name']}")
+            print(f"  Success rate: {stats['success_rate']*100:.1f}%")
+            print(f"  Utilization: {utilization*100:.1f}%")
+    
+    # Gerar problemas
+    print("\n" + "="*70)
+    print("GERAÇÃO DE PROBLEMAS")
+    print("="*70)
+    
+    for i in range(3):
+        config = curriculum.get_problem_config()
+        pieces = curriculum.generate_pieces(config)
         
         print(f"\nProblema {i+1}:")
-        print(f"  Stage: {problem['stage_info']['stage_name']}")
-        print(f"  Peças: {problem['stage_info']['n_pieces']}")
-        print(f"  Complexidade: {problem['stage_info']['complexity']}")
-        print(f"  Container: {problem['container_size']}")
-        print(f"  Exemplo peça 0: {problem['pieces'][0]}")
-    
-    # Simular progressão
-    print("\n" + "="*70)
-    print("SIMULANDO PROGRESSÃO")
-    print("="*70)
-    
-    for episode in range(200):
-        # Gerar problema
-        problem = curriculum.generate_problem()
-        
-        # Simular resultado (performance melhora com tempo)
-        base_util = 0.4 + (episode / 200) * 0.3
-        noise = np.random.uniform(-0.1, 0.1)
-        utilization = np.clip(base_util + noise, 0, 1)
-        success = utilization > 0.5
-        
-        # Registrar
-        curriculum.record_episode(utilization, success)
-        
-        # Verificar avanço
-        if curriculum.should_advance():
-            curriculum.advance_stage()
-        
-        # Log a cada 25 episódios
-        if (episode + 1) % 25 == 0:
-            stats = curriculum.get_stats()
-            print(f"\nEpisode {episode + 1}:")
-            print(f"  Stage: {stats['stage_name']}")
-            print(f"  Recent Util: {stats['recent_utilization']:.2%}")
-            print(f"  Recent Success: {stats['recent_success_rate']:.2%}")
-            print(f"  Target: {stats['target_utilization']:.2%}")
-            print(f"  Can Advance: {stats['can_advance']}")
+        print(f"  Peças: {len(pieces)}")
+        print(f"  Complexidade: {config['piece_complexity']}")
+        print(f"  Tipos: {[type(p).__name__ for p in pieces[:3]]}...")
     
     print("\n" + "="*70)
-    print("✓ CURRICULUM LEARNING IMPLEMENTADO!")
+    print("✓ CURRICULUM SCHEDULER IMPLEMENTADO!")
     print("="*70)
