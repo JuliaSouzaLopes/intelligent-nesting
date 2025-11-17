@@ -14,7 +14,7 @@ from checkpoint_manager import load_latest_checkpoint
 
 
 def criar_pecas_exemplo():
-    #"""Cria peças de exemplo para teste"""
+    """Cria peças de exemplo para teste"""
     from src.geometry.polygon import Polygon
     
     # Peças simples para teste
@@ -52,32 +52,40 @@ def testar_com_checkpoint():
     # 3. Configura o ambiente
     print("\n🎯 Configurando ambiente...")
     try:
-        from src.environment.nesting_env_fixed import NestingEnv
+        # CORREÇÃO: Importar a classe correta
+        from src.environment.nesting_env_fixed import NestingEnvironmentFixed, NestingConfig
         
-        env = NestingEnv(
-            pieces=pecas,
-            sheet_width=500,
-            sheet_height=400,
+        # Criar configuração
+        config = NestingConfig(
+            container_width=500,
+            container_height=400,
+            max_steps=10
+        )
+        
+        # Criar ambiente
+        env = NestingEnvironmentFixed(
+            config=config,
             render_mode=None
         )
         print("   ✓ Ambiente criado com sucesso")
         
     except Exception as e:
         print(f"   ❌ Erro ao criar ambiente: {e}")
+        import traceback
+        traceback.print_exc()
         return
     
     # 4. Cria o modelo (simplificado - sem CNN completo)
     print("\n🧠 Criando modelo...")
     try:
         # Determina dimensões
-        obs_shape = env.observation_space['visual'].shape
-        n_actions = env.action_space.shape[0]
+        obs_shape = env.observation_space['layout_image'].shape
+        n_actions = 3  # x, y, rotation (como proporção)
         
-        print(f"   Observação: {obs_shape}")
-        print(f"   Ações: {n_actions}")
+        print(f"   Observação visual: {obs_shape}")
+        print(f"   Ações: {n_actions} (x, y, rotation)")
         
         # Cria modelo simples para demonstração
-        from collections import OrderedDict
         import torch.nn as nn
         
         class SimpleActor(nn.Module):
@@ -99,7 +107,7 @@ def testar_com_checkpoint():
                 
             def forward(self, x):
                 if isinstance(x, dict):
-                    x = x['visual']
+                    x = x['layout_image']
                 x = self.conv(x)
                 x = x.view(x.size(0), -1)
                 return self.fc(x)
@@ -127,25 +135,38 @@ def testar_com_checkpoint():
     print("\n🎮 Executando teste...")
     print("-" * 80)
     
-    obs, info = env.reset()
+    obs, info = env.reset(options={'pieces': pecas})
     total_reward = 0
     
     for step in range(min(len(pecas), 5)):  # Máximo 5 passos ou número de peças
         # Converte observação para tensor
-        visual_obs = torch.FloatTensor(obs['visual']).unsqueeze(0)
+        layout_tensor = torch.FloatTensor(obs['layout_image']).unsqueeze(0)
         
         # Obtém ação do modelo
         with torch.no_grad():
-            action = actor({'visual': visual_obs}).squeeze(0).numpy()
+            action_values = actor({'layout_image': layout_tensor}).squeeze(0).numpy()
+        
+        # Converte para formato do ambiente
+        # action_values está em [-1, 1], normalizar para [0, 1]
+        position = (action_values[:2] + 1) / 2  # x, y em [0, 1]
+        rotation_normalized = (action_values[2] + 1) / 2  # rotation em [0, 1]
+        rotation_bin = int(rotation_normalized * env.config.rotation_bins)
+        rotation_bin = np.clip(rotation_bin, 0, env.config.rotation_bins - 1)
+        
+        action = {
+            'position': position,
+            'rotation': rotation_bin
+        }
         
         # Executa ação
         obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
         
         print(f"Passo {step + 1}:")
-        print(f"  Ação: x={action[0]:.3f}, y={action[1]:.3f}, rot={action[2]:.3f}")
+        print(f"  Ação: x={position[0]:.3f}, y={position[1]:.3f}, rot_bin={rotation_bin}")
         print(f"  Recompensa: {reward:.4f}")
         print(f"  Utilização: {info.get('utilization', 0):.2%}")
+        print(f"  Status: {info.get('placement_status', 'N/A')}")
         
         if terminated or truncated:
             print(f"\n🏁 Episódio finalizado no passo {step + 1}")
@@ -155,7 +176,7 @@ def testar_com_checkpoint():
     print(f"\n📊 Resultado Final:")
     print(f"   Recompensa total: {total_reward:.4f}")
     print(f"   Utilização final: {info.get('utilization', 0):.2%}")
-    print(f"   Peças posicionadas: {info.get('pieces_placed', 0)}/{len(pecas)}")
+    print(f"   Peças posicionadas: {info.get('n_placed', 0)}/{len(pecas)}")
     
     # 6. Informações do checkpoint
     print("\n" + "=" * 80)
@@ -171,7 +192,9 @@ def testar_com_checkpoint():
         print(f"Utilização média no treino: {checkpoint['avg_utilization']:.2%}")
     
     print("\n✅ Teste concluído!")
+    env.close()
 
 
 if __name__ == "__main__":
+    testar_com_checkpoint()
     testar_com_checkpoint()

@@ -1,6 +1,5 @@
 # """
-# Use Trained Model - Usa modelo treinado para fazer nesting de peças reais
-# Carrega automaticamente o checkpoint mais recente
+# Script para usar modelo treinado - Carrega checkpoint e testa em peças
 # """
 import sys
 from pathlib import Path
@@ -11,51 +10,50 @@ if str(Path(__file__).parent) not in sys.path:
 
 import torch
 import numpy as np
-import json
-from typing import List, Dict, Any, Optional
-from checkpoint_manager import CheckpointManager
+import matplotlib.pyplot as plt
+from typing import List, Optional, Tuple, Dict
+from checkpoint_manager import load_latest_checkpoint
+from src.environment.nesting_env_fixed import NestingEnvironmentFixed, NestingConfig
+from src.geometry.polygon import Polygon, create_rectangle, create_random_polygon
 
 
 class NestingPredictor:
-    #"""Classe para usar modelo treinado em produção"""
+    # """
+    # Classe para fazer predições usando modelo treinado
+    # """
     
-    def __init__(self, checkpoint_dir: str = "scripts", device: str = None):
+    def __init__(self, checkpoint_path: Optional[str] = None, device: str = 'cpu'):
         # """
         # Inicializa o preditor
         
         # Args:
-        #     checkpoint_dir: Diretório com checkpoints
-        #     device: 'cpu', 'cuda', ou None (auto-detecta)
+        #     checkpoint_path: Caminho específico do checkpoint (None = mais recente)
+        #     device: 'cpu' ou 'cuda'
         # """
-        # Auto-detecta device
-        if device is None:
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
-        
-        print(f"🖥️  Usando device: {device}")
-        
-        # Carrega checkpoint
-        self.checkpoint_manager = CheckpointManager(checkpoint_dir)
-        self.checkpoint = self.checkpoint_manager.load_checkpoint(device=device)
-        
-        if self.checkpoint is None:
-            raise RuntimeError("Nenhum checkpoint encontrado! Execute o treinamento primeiro.")
-        
+        self.checkpoint = None
         self.actor = None
         self.env = None
         
-    def setup_model(self, obs_shape: tuple, n_actions: int):
-        # """
-        # Configura o modelo com as dimensões corretas
+        # Carrega checkpoint
+        if checkpoint_path:
+            self.checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        else:
+            self.checkpoint = load_latest_checkpoint(device=device)
         
-        # Args:
-        #     obs_shape: Shape da observação visual (C, H, W)
-        #     n_actions: Número de ações
-        # """
+        if self.checkpoint is None:
+            raise ValueError("Nenhum checkpoint encontrado!")
+        
+        print("✓ Checkpoint carregado com sucesso")
+        self._setup_model()
+    
+    def _setup_model(self):
+        #"""Configura o modelo a partir do checkpoint"""
         import torch.nn as nn
         
+        # Modelo simples (deve corresponder ao usado no treinamento)
         class SimpleActor(nn.Module):
-            def __init__(self, obs_channels, n_actions):
+            def __init__(self, obs_channels=6, n_actions=3):
                 super().__init__()
                 self.conv = nn.Sequential(
                     nn.Conv2d(obs_channels, 32, 3, stride=2, padding=1),
@@ -73,199 +71,257 @@ class NestingPredictor:
                 
             def forward(self, x):
                 if isinstance(x, dict):
-                    x = x['visual']
+                    x = x['layout_image']
                 x = self.conv(x)
                 x = x.view(x.size(0), -1)
                 return self.fc(x)
         
-        self.actor = SimpleActor(obs_shape[0], n_actions).to(self.device)
+        self.actor = SimpleActor()
         
-        # Carrega pesos
+        # Carregar pesos
         if 'actor_state_dict' in self.checkpoint:
-            self.actor.load_state_dict(self.checkpoint['actor_state_dict'])
-            print("✓ Modelo carregado com sucesso")
-        else:
-            print("⚠️  Checkpoint sem pesos do actor - usando modelo aleatório")
+            try:
+                self.actor.load_state_dict(self.checkpoint['actor_state_dict'])
+                print("✓ Pesos do modelo carregados")
+            except Exception as e:
+                print(f"⚠️  Aviso: Não foi possível carregar pesos exatos: {e}")
+                print("   Usando modelo com pesos aleatórios")
         
         self.actor.eval()
+        self.actor.to(self.device)
     
-    def nest_pieces(self, pieces: List, sheet_width: float, sheet_height: float,
-                   verbose: bool = True) -> Dict[str, Any]:
+    def nest_pieces(self, 
+                    pieces: List[Polygon],
+                    container_width: float = 1000,
+                    container_height: float = 600,
+                    render: bool = False,
+                    max_steps: Optional[int] = None) -> Dict:
         # """
-        # Faz nesting de peças
+        # Posiciona peças usando o modelo treinado
         
         # Args:
-        #     pieces: Lista de polígonos (objetos Polygon)
-        #     sheet_width: Largura da chapa
-        #     sheet_height: Altura da chapa
-        #     verbose: Se True, mostra progresso
+        #     pieces: Lista de polígonos para posicionar
+        #     container_width: Largura do container
+        #     container_height: Altura do container
+        #     render: Se True, renderiza durante execução
+        #     max_steps: Máximo de passos (None = len(pieces))
             
         # Returns:
-        #     Dicionário com resultados do nesting
+        #     Dicionário com resultados
         # """
-        from src.environment.nesting_env_fixed import NestingEnv
-        
-        # Cria ambiente
-        self.env = NestingEnv(
-            pieces=pieces,
-            sheet_width=sheet_width,
-            sheet_height=sheet_height,
-            render_mode=None
+        # Configuração do ambiente
+        config = NestingConfig(
+            container_width=container_width,
+            container_height=container_height,
+            max_steps=max_steps or len(pieces) * 2
         )
         
-        # Configura modelo se ainda não foi configurado
-        if self.actor is None:
-            obs_shape = self.env.observation_space['visual'].shape
-            n_actions = self.env.action_space.shape[0]
-            self.setup_model(obs_shape, n_actions)
+        # CORREÇÃO: Criar ambiente sem passar pieces
+        self.env = NestingEnvironmentFixed(
+            config=config,
+            render_mode='human' if render else None
+        )
         
-        # Executa nesting
-        obs, info = self.env.reset()
-        placements = []
+        # CORREÇÃO: Passar pieces através do reset
+        obs, info = self.env.reset(options={'pieces': pieces})
+        
+        # Executar episódio
         total_reward = 0
+        placements = []
+        done = False
+        step = 0
         
-        if verbose:
-            print(f"\n🎯 Fazendo nesting de {len(pieces)} peças...")
-            print("-" * 80)
+        print("\n" + "="*70)
+        print("EXECUTANDO NESTING")
+        print("="*70)
         
-        for step in range(len(pieces)):
-            # Converte observação
-            visual_obs = torch.FloatTensor(obs['visual']).unsqueeze(0).to(self.device)
+        while not done and step < config.max_steps:
+            # Obter ação do modelo
+            action = self._predict_action(obs)
             
-            # Predição
-            with torch.no_grad():
-                action = self.actor({'visual': visual_obs}).cpu().squeeze(0).numpy()
-            
-            # Executa
+            # Executar ação
             obs, reward, terminated, truncated, info = self.env.step(action)
+            done = terminated or truncated
             total_reward += reward
+            step += 1
             
-            # Registra posicionamento
-            placement = {
-                'piece_index': step,
-                'x': float(action[0]),
-                'y': float(action[1]),
-                'rotation': float(action[2]),
-                'reward': float(reward),
-                'valid': info.get('valid_placement', True)
+            # Registrar placement
+            placement_info = {
+                'step': step,
+                'action': action,
+                'reward': reward,
+                'status': info.get('placement_status', 'unknown'),
+                'utilization': info.get('utilization', 0)
             }
-            placements.append(placement)
+            placements.append(placement_info)
             
-            if verbose:
-                status = "✓" if placement['valid'] else "✗"
-                print(f"Peça {step + 1:2d}/{len(pieces)} {status}: "
-                      f"pos=({action[0]:6.3f}, {action[1]:6.3f}), "
-                      f"rot={action[2]:6.3f}, "
-                      f"reward={reward:7.4f}")
+            # Log
+            print(f"Passo {step}:")
+            print(f"  Posição: ({action['position'][0]:.3f}, {action['position'][1]:.3f})")
+            print(f"  Rotação: bin {action['rotation']}")
+            print(f"  Recompensa: {reward:.4f}")
+            print(f"  Status: {info.get('placement_status', 'N/A')}")
+            print(f"  Utilização: {info.get('utilization', 0):.2%}")
             
-            if terminated or truncated:
+            if render:
+                self.env.render()
+            
+            if terminated:
+                print(f"\n✓ Todas as peças posicionadas!")
+                break
+            elif truncated:
+                print(f"\n⚠️  Máximo de passos atingido")
                 break
         
-        if verbose:
-            print("-" * 80)
-        
-        # Resultado final
-        result = {
-            'placements': placements,
-            'total_reward': float(total_reward),
-            'utilization': float(info.get('utilization', 0)),
-            'pieces_placed': info.get('pieces_placed', 0),
+        # Resultados finais
+        results = {
+            'total_reward': total_reward,
+            'steps': step,
+            'utilization': info.get('utilization', 0),
+            'pieces_placed': info.get('n_placed', 0),
             'total_pieces': len(pieces),
-            'success_rate': info.get('pieces_placed', 0) / len(pieces) if pieces else 0,
-            'sheet_width': sheet_width,
-            'sheet_height': sheet_height,
-            'checkpoint_info': {
-                'epoch': self.checkpoint.get('epoch', 'unknown'),
-                'iteration': self.checkpoint.get('iteration', 'unknown'),
-                'training_reward': self.checkpoint.get('avg_reward', 'unknown'),
-                'training_utilization': self.checkpoint.get('avg_utilization', 'unknown')
-            }
+            'placements': placements,
+            'success': info.get('n_placed', 0) == len(pieces)
         }
         
-        return result
+        print("\n" + "="*70)
+        print("RESULTADOS")
+        print("="*70)
+        print(f"Recompensa total: {total_reward:.4f}")
+        print(f"Passos executados: {step}")
+        print(f"Peças posicionadas: {results['pieces_placed']}/{results['total_pieces']}")
+        print(f"Utilização final: {results['utilization']:.2%}")
+        print(f"Sucesso: {'✓' if results['success'] else '✗'}")
+        
+        return results
     
-    def save_result(self, result: Dict[str, Any], output_file: str):
-        #"""Salva resultado em JSON"""
-        with open(output_file, 'w') as f:
-            json.dump(result, f, indent=2)
-        print(f"\n💾 Resultado salvo em: {output_file}")
+    def _predict_action(self, obs: Dict) -> Dict:
+        #"""Prediz ação a partir da observação"""
+        with torch.no_grad():
+            # Converter observação para tensor
+            layout_tensor = torch.FloatTensor(obs['layout_image']).unsqueeze(0).to(self.device)
+            
+            # Obter ação do modelo
+            action_values = self.actor({'layout_image': layout_tensor}).squeeze(0).cpu().numpy()
+            
+            # Converter para formato do ambiente
+            # action_values está em [-1, 1]
+            position = (action_values[:2] + 1) / 2  # Normalizar para [0, 1]
+            rotation_normalized = (action_values[2] + 1) / 2
+            rotation_bin = int(rotation_normalized * self.env.config.rotation_bins)
+            rotation_bin = np.clip(rotation_bin, 0, self.env.config.rotation_bins - 1)
+            
+            return {
+                'position': position,
+                'rotation': rotation_bin
+            }
+    
+    def visualize_result(self):
+        #"""Visualiza o resultado final"""
+        if self.env is None:
+            print("⚠️  Execute nest_pieces() primeiro!")
+            return
+        
+        self.env.render()
+        if self.env.render_mode == 'human' and self.env.fig is not None:
+            plt.show()
+    
+    def close(self):
+        """Fecha o ambiente"""
+        if self.env is not None:
+            self.env.close()
 
 
-def criar_pecas_teste():
+def criar_pecas_teste(n_pieces: int = 10, seed: int = 42) -> List[Polygon]:
     #"""Cria conjunto de peças para teste"""
-    from src.environment.nesting_env_fixed import Polygon
+    np.random.seed(seed)
+    pieces = []
     
-    pecas = [
-        # Retângulos variados
-        Polygon([(0, 0), (120, 0), (120, 60), (0, 60)]),
-        Polygon([(0, 0), (100, 0), (100, 80), (0, 80)]),
-        Polygon([(0, 0), (80, 0), (80, 50), (0, 50)]),
-        Polygon([(0, 0), (90, 0), (90, 70), (0, 70)]),
-        Polygon([(0, 0), (110, 0), (110, 55), (0, 55)]),
+    for i in range(n_pieces):
+        if i % 3 == 0:
+            # Retângulo
+            width = np.random.uniform(50, 150)
+            height = np.random.uniform(40, 120)
+            piece = create_rectangle(width, height)
+        else:
+            # Polígono irregular
+            n_vertices = np.random.randint(5, 8)
+            radius = np.random.uniform(30, 60)
+            piece = create_random_polygon(
+                n_vertices=n_vertices,
+                radius=radius,
+                irregularity=0.5,
+                spikeyness=0.3
+            )
         
-        # Formas em L
-        Polygon([(0, 0), (60, 0), (60, 30), (30, 30), (30, 60), (0, 60)]),
-        Polygon([(0, 0), (50, 0), (50, 25), (25, 25), (25, 50), (0, 50)]),
-        
-        # Triângulos
-        Polygon([(0, 0), (70, 0), (35, 60)]),
-        Polygon([(0, 0), (60, 0), (30, 50)]),
-    ]
+        piece.id = i
+        pieces.append(piece)
     
-    return pecas
+    return pieces
 
 
 def demonstracao_completa():
-    #"""Demonstração completa do uso do modelo"""
+    """Demonstração completa do uso do modelo treinado"""
     
-    print("=" * 80)
-    print("USO DE MODELO TREINADO - Nesting Automático")
-    print("=" * 80)
+    print("="*70)
+    print("DEMONSTRAÇÃO - USO DE MODELO TREINADO")
+    print("="*70)
     
     try:
-        # 1. Inicializa preditor (carrega checkpoint automaticamente)
-        print("\n📥 Inicializando preditor...")
-        predictor = NestingPredictor(checkpoint_dir="scripts")
-        
-        # 2. Cria peças de teste
+        # 1. Criar peças de teste
         print("\n📦 Criando peças de teste...")
-        pecas = criar_pecas_teste()
-        print(f"   Criadas {len(pecas)} peças diversas")
+        pieces = criar_pecas_teste(n_pieces=8, seed=42)
+        print(f"   Criadas {len(pieces)} peças")
         
-        # 3. Executa nesting
+        # Calcular área total
+        total_area = sum(p.area for p in pieces)
+        print(f"   Área total das peças: {total_area:.2f}")
+        
+        # 2. Inicializar preditor
+        print("\n🧠 Inicializando preditor...")
+        predictor = NestingPredictor(device='cpu')
+        
+        # Mostrar info do checkpoint
+        if 'epoch' in predictor.checkpoint:
+            print(f"   Época: {predictor.checkpoint['epoch']}")
+        if 'avg_reward' in predictor.checkpoint:
+            print(f"   Recompensa média treino: {predictor.checkpoint['avg_reward']:.4f}")
+        
+        # 3. Executar nesting
+        print("\n🎯 Executando nesting...")
         result = predictor.nest_pieces(
-            pieces=pecas,
-            sheet_width=600,
-            sheet_height=500,
-            verbose=True
+            pieces=pieces,
+            container_width=1000,
+            container_height=600,
+            render=False  # Mude para True se quiser ver em tempo real
         )
         
-        # 4. Mostra resultado
-        print("\n" + "=" * 80)
-        print("📊 RESULTADO DO NESTING")
-        print("=" * 80)
-        print(f"Peças posicionadas: {result['pieces_placed']}/{result['total_pieces']}")
-        print(f"Taxa de sucesso: {result['success_rate']:.1%}")
-        print(f"Utilização da chapa: {result['utilization']:.2%}")
-        print(f"Recompensa total: {result['total_reward']:.4f}")
+        # 4. Visualizar resultado final
+        print("\n📊 Visualizando resultado final...")
+        predictor.visualize_result()
         
-        print(f"\nDimensões da chapa: {result['sheet_width']} x {result['sheet_height']}")
-        print(f"Área total: {result['sheet_width'] * result['sheet_height']:.0f}")
+        # 5. Análise dos resultados
+        print("\n" + "="*70)
+        print("ANÁLISE DETALHADA")
+        print("="*70)
         
-        # 5. Informações do checkpoint usado
-        ckpt = result['checkpoint_info']
-        print(f"\n🔖 Checkpoint usado:")
-        print(f"   Época: {ckpt['epoch']}")
-        if ckpt['training_reward'] != 'unknown':
-            print(f"   Recompensa no treino: {ckpt['training_reward']:.4f}")
-        if ckpt['training_utilization'] != 'unknown':
-            print(f"   Utilização no treino: {ckpt['training_utilization']:.2%}")
+        if result['success']:
+            print("✅ SUCESSO - Todas as peças foram posicionadas!")
+        else:
+            print(f"⚠️  PARCIAL - {result['pieces_placed']}/{result['total_pieces']} peças posicionadas")
         
-        # 6. Salva resultado
-        output_file = "/mnt/user-data/outputs/nesting_result.json"
-        predictor.save_result(result, output_file)
+        print(f"\nEficiência:")
+        print(f"  Utilização do container: {result['utilization']:.2%}")
+        print(f"  Recompensa por passo: {result['total_reward']/max(result['steps'], 1):.4f}")
         
-        print("\n✅ Nesting concluído com sucesso!")
+        # Análise de placements
+        successful_placements = sum(1 for p in result['placements'] if p['status'] == 'valid')
+        print(f"\nPlacements:")
+        print(f"  Válidos: {successful_placements}/{len(result['placements'])}")
+        print(f"  Taxa de sucesso: {successful_placements/max(len(result['placements']), 1):.2%}")
+        
+        # Limpeza
+        predictor.close()
         
         return result
         
@@ -276,58 +332,61 @@ def demonstracao_completa():
         return None
 
 
-def exemplo_producao():
-    #"""Exemplo de uso em produção com peças customizadas"""
+def teste_multiplos_casos():
+    #"""Testa o modelo em múltiplos casos"""
+    print("="*70)
+    print("TESTE EM MÚLTIPLOS CASOS")
+    print("="*70)
     
-    print("\n" + "=" * 80)
-    print("EXEMPLO: Uso em Produção")
-    print("=" * 80)
+    predictor = NestingPredictor(device='cpu')
     
-    print("""
-    Para usar em produção com suas próprias peças:
+    casos = [
+        {'n_pieces': 5, 'seed': 42, 'nome': 'Fácil (5 peças)'},
+        {'n_pieces': 10, 'seed': 123, 'nome': 'Médio (10 peças)'},
+        {'n_pieces': 15, 'seed': 456, 'nome': 'Difícil (15 peças)'},
+    ]
     
-    1. Carregue suas peças de arquivo (JSON, DXF, SVG, etc):
-       
-       from nesting_env import Polygon
-       import json
-       
-       # Exemplo: Carregando de JSON
-       with open('pecas.json', 'r') as f:
-           data = json.load(f)
-       
-       pecas = [Polygon(p['vertices']) for p in data['pecas']]
+    resultados = []
     
-    2. Inicialize o preditor:
-       
-       predictor = NestingPredictor()
+    for caso in casos:
+        print(f"\n{'='*70}")
+        print(f"Caso: {caso['nome']}")
+        print(f"{'='*70}")
+        
+        pieces = criar_pecas_teste(n_pieces=caso['n_pieces'], seed=caso['seed'])
+        
+        result = predictor.nest_pieces(
+            pieces=pieces,
+            container_width=1000,
+            container_height=600,
+            render=False
+        )
+        
+        resultados.append({
+            'caso': caso['nome'],
+            'result': result
+        })
     
-    3. Execute o nesting:
-       
-       result = predictor.nest_pieces(
-           pieces=pecas,
-           sheet_width=1000,
-           sheet_height=800,
-           verbose=True
-       )
+    # Resumo
+    print("\n" + "="*70)
+    print("RESUMO DOS TESTES")
+    print("="*70)
     
-    4. Salve os resultados:
-       
-       predictor.save_result(result, 'resultado.json')
+    for r in resultados:
+        print(f"\n{r['caso']}:")
+        print(f"  Utilização: {r['result']['utilization']:.2%}")
+        print(f"  Sucesso: {'✓' if r['result']['success'] else '✗'}")
+        print(f"  Recompensa: {r['result']['total_reward']:.2f}")
     
-    5. Use os resultados para corte:
-       
-       for placement in result['placements']:
-           if placement['valid']:
-               print(f"Peça {placement['piece_index']}: "
-                     f"x={placement['x']}, y={placement['y']}, "
-                     f"rotação={placement['rotation']}")
-    """)
+    predictor.close()
 
 
 if __name__ == "__main__":
-    # Executa demonstração completa
-    resultado = demonstracao_completa()
+    import sys
     
-    # Mostra exemplo de uso em produção
-    if resultado:
-        exemplo_producao()
+    if len(sys.argv) > 1 and sys.argv[1] == '--multiplos':
+        teste_multiplos_casos()
+    else:
+        demonstracao_completa()
+        
+    print("\n✅ Demonstração concluída!")
