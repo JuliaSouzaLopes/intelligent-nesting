@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1000" height="600" 
+     viewBox="0 0 1000 600"
+     xmlns="http://www.w3.org/2000/svg">
+    
+    <!-- Container -->
+    <rect x="0" y="0" width="1000" height="600"
+          fill="none" stroke="black" stroke-width="2"/>
+    
+    <!-- Peças -->
+    <polygon points="12.943183898925781,133.097900390625 109.361328125,18.191238403320312 185.96575927734375,82.47000122070312 89.54762268066406,197.3766632080078" 
+            fill="#FF6B6B" fill-opacity="0.7" 
+            stroke="black" stroke-width="1"/>
+
+    <!-- Info -->
+    <text x="10" y="30" font-size="20" font-family="Arial">
+        Utilização: 2.5%
+    </text>
+    <text x="10" y="55" font-size="16" font-family="Arial">
+        Peças: 1/5 
+    </text>
+</svg>

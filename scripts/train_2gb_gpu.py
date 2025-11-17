@@ -19,7 +19,7 @@ import numpy as np
 from tqdm import tqdm
 import time
 
-from src.environment.nesting_env import NestingEnvironment, NestingConfig
+from src.environment.nesting_env_fixed import NestingEnvironment, NestingConfig
 from src.geometry.polygon import create_rectangle, create_random_polygon
 
 
